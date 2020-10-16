@@ -128,8 +128,10 @@ class Signal_Synthesis_DataGen(Dataset):
         noise_id = idx - signal_id*len(noise_paths)
 #         print(signal_id, noise_id)
         signal_path, noise_path = signal_paths[signal_id], noise_paths[noise_id]
+    
+        signal_noise_add, signal = self.develop_data(signal_path, noise_path)
         
-        return signal_path, noise_path
+        return signal_noise_add, signal
         
     def develop_data(self, signal_path, noise_path):
         
@@ -157,9 +159,9 @@ class Signal_Synthesis_DataGen(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
             
-        signal_path, noise_path = self.get_ids(self.signal_paths, self.noise_paths, idx)
+        signal_noise_add, signal = self.get_ids(self.signal_paths, self.noise_paths, idx)
         
-        signal_noise_add, signal = self.develop_data(signal_path, noise_path)
+#         signal_noise_add, signal = self.develop_data(signal_path, noise_path)
         
         return signal_noise_add/signal_noise_add.max(), signal/signal.max()
 #         return signal_noise_add, signal
