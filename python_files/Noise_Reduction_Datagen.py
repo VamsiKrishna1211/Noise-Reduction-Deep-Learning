@@ -10,13 +10,10 @@ from torch.utils.data import Dataset, DataLoader
 
 import os
 
-import librosa
-import pandas as pd
 import IPython.display as ipd
 
 import numpy as np
 
-import glob
 import gc
 from random import shuffle
 from tqdm.auto import tqdm
@@ -28,7 +25,7 @@ from tqdm.auto import tqdm
 class Signal_Synthesis_DataGen(Dataset):
     def __init__(self, noise_dir, signal_dir, signal_nums_save=None, num_noise_samples=None, num_signal_samples=None, noise_path_save=None,\
                  n_fft=400, win_length=400, hop_len=200, create_specgram=False, \
-                 perform_stft=True, normalize=True, default_sr=16000, sec=6, augment=False):
+                 perform_stft=True, normalize=True, default_sr=16000, sec=6, augment=False, device="cpu"):
 
         self.noise_dir = noise_dir
         self.signal_dir = signal_dir
@@ -46,11 +43,10 @@ class Signal_Synthesis_DataGen(Dataset):
         self.sec = sec
         self.augment = augment
 
-        self.device = "cpu" if torch.cuda.is_available() else "cpu"
+        self.device = device# if torch.cuda.is_available() else "cpu"
 
         if self.create_specgram == True and self.perform_stft == True:
             raise Exception("Use only one option out of 'create_specgram' and 'perform_stft'")
-
 
 
         if os.path.exists(self.noise_path_save):
@@ -63,6 +59,7 @@ class Signal_Synthesis_DataGen(Dataset):
                     if name.endswith(".wav"):
                         noise_paths.append(os.path.join(root, name))
             noise_paths = np.asarray(noise_paths)
+
 #         shuffle(noise_paths)
         # print(self.num_noise_samples)
         if self.num_noise_samples is not None:
@@ -116,16 +113,17 @@ class Signal_Synthesis_DataGen(Dataset):
         #     signal = ta.transforms.Vad(sample_rate=default_sr)(signal)
 
         sig_length = int(default_sr * sec)
-
+        # print(len(signal), sig_length)
         if len(signal) > sig_length:
-            signal = signal[: sig_length]
+            # print("enter len if")
+            signal = signal[0 : sig_length]
         elif len(signal) <= sig_length:
             zero_signal = torch.zeros((signal.shape)).to(self.device)
             while len(signal) < sig_length:
                 signal = torch.cat((signal, zero_signal))
                 zero_signal = torch.zeros(signal.shape).to(self.device)
-            signal = signal[ : sig_length]
-
+            signal = signal[0 : sig_length]
+        # print(f"Final Signal len = {len(signal)}")
 
         noise_len = len(noise)
         signal_len = len(signal)
@@ -174,21 +172,29 @@ class Signal_Synthesis_DataGen(Dataset):
 
     def develop_data(self, signal_path, noise_path):
 
+
         SNR = np.random.randint(0, np.random.randint(0, 50)+1)
 #         print(SNR)
 
-        noise, nsr = librosa.load(noise_path, sr=self.default_sr)
-        signal, ssr = librosa.load(signal_path, sr=self.default_sr)
-        noise = torch.from_numpy(noise).to(self.device)
-        signal = torch.from_numpy(signal).to(self.device)
+        # noise, nsr = librosa.load(noise_path, sr=self.default_sr)
+        # signal, ssr = librosa.load(signal_path, sr=self.default_sr)
+        # noise = torch.from_numpy(noise).to(self.device).to(self.device)
+        # signal = torch.from_numpy(signal).to(self.device).to(self.device)
+
+        noise, nsr = ta.load(noise_path)
+        noise = noise[0].to(self.device)
         noise = noise.type(torch.float32)
+        if nsr != self.default_sr:
+            noise = ta.transforms.Resample(orig_freq=nsr, new_freq=self.default_sr)(noise)
+        signal, ssr = ta.load(signal_path)
+        signal = signal[0].to(self.device)
         signal = signal.type(torch.float32)
-        # noise, nsr = ta.load(noise_path)
-        # noise = ta.transforms.Resample(orig_freq=nsr, new_freq=self.default_sr)(noise)
-        # signal, ssr = ta.load(signal_path)
-        # signal = ta.transforms.Resample(orig_freq=ssr, new_freq=self.default_sr)(signal)
-        # noise = torch.from_numpy(noise)
-        # signal = torch.from_numpy(signal)
+        if ssr != self.default_sr:
+            signal = ta.transforms.Resample(orig_freq=ssr, new_freq=self.default_sr)(signal)
+
+        # noise = noise.type(torch.float32)
+        # signal = signal.type(torch.float32)
+
 
         signal_noise_add, signal = self.get_mixed_signal(signal, noise, self.default_sr, self.sec, SNR)
         if self.perform_stft:
@@ -199,6 +205,8 @@ class Signal_Synthesis_DataGen(Dataset):
             spec_transformer = ta.transforms.Spectrogram(n_fft=self.n_fft, win_length=self.win_length, hop_length=self.hop_len, normalized=self.normalize)
             signal_noise_add = spec_transformer(signal_noise_add)
             signal = spec_transformer(signal)
+
+        gc.collect()
 
         return signal_noise_add, signal
 
@@ -214,7 +222,6 @@ class Signal_Synthesis_DataGen(Dataset):
             idx = idx.tolist()
 
         signal_noise_add, signal = self.get_ids(idx)
-        gc.collect()
 
 #         signal_noise_add, signal = signal_noise_add/signal_noise_add.max(), signal/signal.max()
         # print("returning the values from getitem dataset")
