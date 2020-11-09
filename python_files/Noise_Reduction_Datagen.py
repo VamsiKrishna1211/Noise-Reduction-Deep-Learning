@@ -25,7 +25,7 @@ from tqdm.auto import tqdm
 class Signal_Synthesis_DataGen(Dataset):
     def __init__(self, noise_dir, signal_dir, signal_nums_save=None, num_noise_samples=None, num_signal_samples=None, noise_path_save=None,\
                  n_fft=400, win_length=400, hop_len=200, create_specgram=False, \
-                 perform_stft=True, normalize=True, default_sr=16000, sec=6, augment=False, device="cpu"):
+                 perform_stft=True, normalize=True, default_sr=16000, sec=6, epsilon=1e-5, augment=False, device="cpu"):
 
         self.noise_dir = noise_dir
         self.signal_dir = signal_dir
@@ -41,7 +41,9 @@ class Signal_Synthesis_DataGen(Dataset):
         self.normalize = normalize
         self.default_sr = default_sr
         self.sec = sec
+        self.epsilon = epsilon
         self.augment = augment
+
 
         self.device = device# if torch.cuda.is_available() else "cpu"
 
@@ -79,7 +81,9 @@ class Signal_Synthesis_DataGen(Dataset):
         self.suffix = ".mp3"
 
 
-
+    def normalize_signal(self, tensor):
+        tensor_min_minus = tensor - tensor.min()
+        return tensor_min_minus/(tensor_min_minus.abs().max() + self.epsilon)
 
     def get_signal_paths(self, clips_path):
 
@@ -109,20 +113,28 @@ class Signal_Synthesis_DataGen(Dataset):
     def get_mixed_signal(self, signal: torch.Tensor, noise: torch.Tensor, default_sr, sec, SNR):
 
         snip_audio = np.random.randint(0, 2)
-        # if snip_audio:
-        #     signal = ta.transforms.Vad(sample_rate=default_sr)(signal)
+        if snip_audio:
+            signal = ta.transforms.Vad(sample_rate=default_sr)(signal)
 
         sig_length = int(default_sr * sec)
+        final_len = int(self.default_sr*self.sec)
         # print(len(signal), sig_length)
         if len(signal) > sig_length:
             # print("enter len if")
             signal = signal[0 : sig_length]
-        elif len(signal) <= sig_length:
-            zero_signal = torch.zeros((signal.shape)).to(self.device)
-            while len(signal) < sig_length:
-                signal = torch.cat((signal, zero_signal))
-                zero_signal = torch.zeros(signal.shape).to(self.device)
-            signal = signal[0 : sig_length]
+        elif len(signal) < sig_length:
+            # zero_signal = torch.zeros((signal.shape)).to(self.device)
+            # while len(signal) < sig_length:
+            #     signal = torch.cat((signal, zero_signal))
+            #     zero_signal = torch.zeros(signal.shape).to(self.device)
+            # signal = signal[0 : sig_length]
+
+
+            add_len = final_len - len(signal)
+            zeros_signal = np.zeros(add_len, dtype=np.float32)
+            signal = signal.to("cpu").numpy()
+            signal = np.append(signal, (zeros_signal))
+            signal = torch.from_numpy(signal).to(self.device)
         # print(f"Final Signal len = {len(signal)}")
 
         noise_len = len(noise)
@@ -133,14 +145,24 @@ class Signal_Synthesis_DataGen(Dataset):
         elif len(noise) <= len(signal):
 
             #noise = torch.cat((noise, torch.zeros((len(signal) - len(noise)))))
-            for i in range(int(len(signal)/len(noise))+1):
-                noise = torch.cat((noise, noise))
+            # for i in range(int(len(signal)/len(noise))+1):
+            #     noise = torch.cat((noise, noise))
+            #
+            # noise = noise[:len(signal)]
 
-            noise = noise[:len(signal)]
+            noise_buffer = np.zeros(final_len, dtype=np.float32)
+            noise = noise.to("cpu").numpy()
+            for i in range(signal_len//noise_len):
+                noise_buffer[i*noise_len : (i+1)*noise_len] = noise
+            noise_buffer[(i+1)*noise_len:] = noise[:(signal_len - (i+1)*noise_len)]
+            noise = torch.from_numpy(noise_buffer).to(self.device)
+            gc.collect()
+
 
         noise = self.get_noise_from_sound(signal, noise, SNR)
 
         signal_noise = signal+noise
+        # print(signal_noise.dtype, noise.dtype, signal.dtype)
         return signal_noise, signal
 
     def construct_signal_path(self, signal_id):
@@ -167,6 +189,10 @@ class Signal_Synthesis_DataGen(Dataset):
         signal_path, noise_path = self.construct_signal_path(signal_id), self.noise_paths[noise_id]
 
         signal_noise_add, signal = self.develop_data(signal_path, noise_path)
+
+        if self.normalize:
+            signal_noise_add = self.normalize_signal(signal_noise_add) + self.epsilon
+            signal = self.normalize_signal(signal) + self.epsilon
 
         return signal_noise_add, signal
 
