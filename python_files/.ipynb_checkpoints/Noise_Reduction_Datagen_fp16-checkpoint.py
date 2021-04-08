@@ -27,8 +27,8 @@ ta.set_audio_backend("sox_io")
 
 
 class Signal_Synthesis_DataGen(Dataset):
-    def __init__(self, noise_dir, signal_dir, signal_nums_save=None, num_noise_samples=None, num_signal_samples=None, noise_path_save=None,\
-                 n_fft=400, win_length=400, hop_len=200, create_specgram=False, \
+    def __init__(self, noise_dir, signal_dir, signal_nums_save=None, num_noise_samples=None, num_signal_samples=None, noise_path_save=None,train=False,\
+                 n_fft=400, win_length=400, hop_len=200, create_specgram=False,  \
                  perform_stft=True, normalize=True, default_sr=16000, sec=6, epsilon=1e-5, augment=False, device="cpu"):
 
         self.noise_dir = noise_dir
@@ -37,6 +37,7 @@ class Signal_Synthesis_DataGen(Dataset):
         self.num_noise_samples = num_noise_samples
         self.num_signal_samples = num_signal_samples
         self.noise_path_save = noise_path_save
+        self.train = train
         self.n_fft = n_fft
         self.win_length = win_length
         self.hop_len = hop_len
@@ -68,22 +69,35 @@ class Signal_Synthesis_DataGen(Dataset):
 
 #         shuffle(noise_paths)
         # print(self.num_noise_samples)
-        if self.num_noise_samples is not None:
-            self.noise_paths = noise_paths[:self.num_noise_samples]
-        else:
-            self.noise_paths = noise_paths
-        if os.path.exists(signal_nums_save):
-            print("Loading nums from npy file")
-            self.signal_nums = torch.from_numpy(np.load(signal_nums_save))
-        else:
-            self.signal_nums = torch.from_numpy(self.get_signal_paths(signal_dir))
+        if train:
+            if self.num_noise_samples is not None:
+                self.noise_paths = noise_paths[:self.num_noise_samples]
+            else:
+                self.noise_paths = noise_paths
+            if os.path.exists(signal_nums_save):
+                print("Loading nums from npy file")
+                self.signal_nums = torch.from_numpy(np.load(signal_nums_save))
+            else:
+                self.signal_nums = torch.from_numpy(self.get_signal_paths(signal_dir))
 
-        if self.num_signal_samples is not None:
+            if self.num_signal_samples is not None:
+                self.signal_nums = self.signal_nums[:self.num_signal_samples]
+            print(len(self.signal_nums))
+            self.prefix = "common_voice_en_"
+            self.suffix = ".mp3"
+
+        else:
+            self.noise_paths = noise_paths[700:800]
+
+            if os.path.exists(signal_nums_save):
+                print("Loading nums from npy file")
+                self.signal_nums = torch.from_numpy(np.load(signal_nums_save))
+            else:
+                self.signal_nums = torch.from_numpy(self.get_signal_paths(signal_dir))
             self.signal_nums = self.signal_nums[:self.num_signal_samples]
-        print(len(self.signal_nums))
-        self.prefix = "common_voice_en_"
-        self.suffix = ".mp3"
-
+            print(len(self.signal_nums))
+            self.prefix = "common_voice_en_"
+            self.suffix = ".mp3"
 
     def normalize_signal(self, tensor):
         tensor_min_minus = tensor - tensor.min()
@@ -127,18 +141,12 @@ class Signal_Synthesis_DataGen(Dataset):
             # print("enter len if")
             signal = signal[0 : sig_length]
         elif len(signal) < sig_length:
-            # zero_signal = torch.zeros((signal.shape)).to(self.device)
-            # while len(signal) < sig_length:
-            #     signal = torch.cat((signal, zero_signal))
-            #     zero_signal = torch.zeros(signal.shape).to(self.device)
-            # signal = signal[0 : sig_length]
-
 
             add_len = final_len - len(signal)
             zeros_signal = np.zeros(add_len, dtype=np.float32)
-            signal = signal.numpy()
+            signal = signal.to("cpu").numpy()
             signal = np.append(signal, (zeros_signal))
-            signal = torch.from_numpy(signal)
+            signal = torch.from_numpy(signal).to(self.device)
         # print(f"Final Signal len = {len(signal)}")
 
         noise_len = len(noise)
@@ -146,28 +154,22 @@ class Signal_Synthesis_DataGen(Dataset):
 
         if len(noise) > len(signal):
             noise = noise[0 : len(signal)]
+
         elif len(noise) <= len(signal):
 
-            #noise = torch.cat((noise, torch.zeros((len(signal) - len(noise)))))
-            # for i in range(int(len(signal)/len(noise))+1):
-            #     noise = torch.cat((noise, noise))
-            #
-            # noise = noise[:len(signal)]
-
             noise_buffer = np.zeros(final_len, dtype=np.float32)
-            noise = noise.numpy()
+            noise = noise.to("cpu").numpy()
             for i in range(signal_len//noise_len):
                 noise_buffer[i*noise_len : (i+1)*noise_len] = noise
             noise_buffer[(i+1)*noise_len:] = noise[:(signal_len - (i+1)*noise_len)]
-            noise = torch.from_numpy(noise_buffer)
+            noise = torch.from_numpy(noise_buffer).to(self.device)
             gc.collect()
 
 
         noise = self.get_noise_from_sound(signal, noise, SNR)
 
         signal_noise = signal+noise
-        # print(signal_noise.dtype, noise.dtype, signal.dtype)
-        return signal_noise, signal
+        return signal_noise, signal, noise
 
     def construct_signal_path(self, signal_id):
 
@@ -188,7 +190,6 @@ class Signal_Synthesis_DataGen(Dataset):
 
         signal_id = idx//len(self.noise_paths)
         noise_id = idx - signal_id*len(self.noise_paths)
-#         print(signal_id, noise_id)
 
         signal_path, noise_path = self.construct_signal_path(signal_id), self.noise_paths[noise_id]
 
@@ -210,15 +211,14 @@ class Signal_Synthesis_DataGen(Dataset):
 #         signal, ssr = librosa.load(signal_path, sr=self.default_sr)
 #         noise = torch.from_numpy(noise).type(torch.float32).to(self.device)
 #         signal = torch.from_numpy(signal).type(torch.float32).to(self.device)
-
         noise, nsr = ta.load(noise_path)
         noise = noise[0].to(self.device)
-        noise = noise.type(torch.float32)
+        noise = noise#.type(torch.float32)
         if nsr != self.default_sr:
             noise = ta.transforms.Resample(orig_freq=nsr, new_freq=self.default_sr)(noise)
         signal, ssr = ta.load(signal_path)
         signal = signal[0].to(self.device)
-        signal = signal.type(torch.float32)
+        signal = signal#.type(torch.float32)
         if ssr != self.default_sr:
             signal = ta.transforms.Resample(orig_freq=ssr, new_freq=self.default_sr)(signal)
 
@@ -226,19 +226,21 @@ class Signal_Synthesis_DataGen(Dataset):
 #         signal = signal.type(torch.float32)
 
 
-        signal_noise_add, signal = self.get_mixed_signal(signal, noise, self.default_sr, self.sec, SNR)
+        signal_noise_add, signal, noise = self.get_mixed_signal(signal, noise, self.default_sr, self.sec, SNR)
         if self.perform_stft:
             signal_noise_add = torch.stft(signal_noise_add, n_fft=self.n_fft, hop_length=self.hop_len, win_length=self.win_length)
             signal = torch.stft(signal, n_fft=self.n_fft, hop_length=self.hop_len, win_length=self.win_length)[:,:,:]
+            noise = torch.stft(noise, n_fft=self.n_fft, hop_length=self.hop_len, win_length=self.win_length)[:,:,:]
             # (signal_noise_add, signal) = torch.stft(combined_signal, n_fft=self.n_fft, hop_length=self.hop_len, win_length=self.win_length, normalized=self.normalize)
         elif self.create_specgram:
             spec_transformer = ta.transforms.Spectrogram(n_fft=self.n_fft, win_length=self.win_length, hop_length=self.hop_len, normalized=self.normalize)
             signal_noise_add = spec_transformer(signal_noise_add)
             signal = spec_transformer(signal)
+            noise = spec_transformer(noise)
 
         gc.collect()
 
-        return signal_noise_add, signal
+        return signal_noise_add.unsqueeze(dim=0), signal.unsqueeze(dim=0)#, noise]
 
 
 
@@ -257,7 +259,6 @@ class Signal_Synthesis_DataGen(Dataset):
         # print("returning the values from getitem dataset")
         # print(signal.shape)
         return signal_noise_add, signal
-#         return signal_noise_add, signal
 
 
 

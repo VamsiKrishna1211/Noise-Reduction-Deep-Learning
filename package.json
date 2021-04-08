@@ -1,0 +1,28 @@
+{
+  "name": "noise-reduction-deep-learning",
+  "version": "1.0.0",
+  "description": "Noise reduction Project",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/VamsiKrishna1211/Noise-Reduction-Deep-Learning.git"
+  },
+  "author": "Vamsi",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/VamsiKrishna1211/Noise-Reduction-Deep-Learning/issues"
+  },
+  "homepage": "https://github.com/VamsiKrishna1211/Noise-Reduction-Deep-Learning#readme",
+  "dependencies": {
+    "recordrtc": "^5.6.1",
+    "require": "^2.4.20",
+    "socket.io": "^3.0.4",
+    "socket.io-stream": "^0.9.1"
+  },
+  "devDependencies": {
+    "eslint": "^7.16.0"
+  }
+}
