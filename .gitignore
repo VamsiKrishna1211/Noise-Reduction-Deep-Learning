@@ -5,3 +5,4 @@ IT\ 221710405017\ report.pdf
 *.pth
 *.pt
 runs/
+**/*.pyc
